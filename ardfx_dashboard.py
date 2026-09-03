@@ -65,26 +65,28 @@ def init_db():
 def trade_open():
     data = request.get_json(force=True)
     conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO trades (bot_name, ticket, symbol, action, lot, open_price, sl, tp, open_time, status, kaynak)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'AÇIK', %s)""",
-        (
-            data.get("bot_name", "Bilinmiyor"),
-            str(data.get("ticket", "")),
-            data.get("symbol", ""),
-            data.get("action", ""),
-            data.get("lot", 0),
-            data.get("open_price", 0),
-            data.get("sl", 0),
-            data.get("tp", 0),
-            datetime.now().isoformat(timespec="seconds"),
-            data.get("kaynak", ""),
-        ),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO trades (bot_name, ticket, symbol, action, lot, open_price, sl, tp, open_time, status, kaynak)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'AÇIK', %s)""",
+            (
+                data.get("bot_name", "Bilinmiyor"),
+                str(data.get("ticket", "")),
+                data.get("symbol", ""),
+                data.get("action", ""),
+                data.get("lot", 0),
+                data.get("open_price", 0),
+                data.get("sl", 0),
+                data.get("tp", 0),
+                datetime.now().isoformat(timespec="seconds"),
+                data.get("kaynak", ""),
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()  # ❗ hata olsa bile bağlantı MUTLAKA kapatılır - havuz sızıntısını önler
     return jsonify({"status": "ok"})
 
 
@@ -94,34 +96,38 @@ def trade_close():
     ticket = str(data.get("ticket", ""))
     bot_name = data.get("bot_name", "Bilinmiyor")
     conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """UPDATE trades SET status=%s, close_price=%s, profit=%s, close_reason=%s, close_time=%s
-           WHERE ticket=%s AND bot_name=%s AND status='AÇIK'""",
-        (
-            data.get("close_reason", "KAPANDI"),
-            data.get("close_price", 0),
-            data.get("profit", 0),
-            data.get("close_reason", ""),
-            datetime.now().isoformat(timespec="seconds"),
-            ticket,
-            bot_name,
-        ),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE trades SET status=%s, close_price=%s, profit=%s, close_reason=%s, close_time=%s
+               WHERE ticket=%s AND bot_name=%s AND status='AÇIK'""",
+            (
+                data.get("close_reason", "KAPANDI"),
+                data.get("close_price", 0),
+                data.get("profit", 0),
+                data.get("close_reason", ""),
+                datetime.now().isoformat(timespec="seconds"),
+                ticket,
+                bot_name,
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/trades", methods=["GET"])
 def api_trades():
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM trades ORDER BY id DESC LIMIT 300")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM trades ORDER BY id DESC LIMIT 300")
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
     return jsonify([dict(r) for r in rows])
 
 
@@ -263,7 +269,7 @@ document.getElementById('statusFilter').addEventListener('change', render);
 document.getElementById('symbolFilter').addEventListener('input', render);
 
 fetchTrades();
-setInterval(fetchTrades, 5000);
+setInterval(fetchTrades, 10000);
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function(){});
