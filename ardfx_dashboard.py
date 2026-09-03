@@ -140,6 +140,19 @@ def api_trades():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/trades/<int:trade_id>", methods=["DELETE"])
+def delete_trade(trade_id):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM trades WHERE id=%s", (trade_id,))
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/", methods=["GET"])
 def dashboard():
     html = """
@@ -172,12 +185,19 @@ def dashboard():
     .badge-other { background:#3a3a3a; color:#ccc; }
     select, input { background:#1a1d29; color:#e6e6e6; border:1px solid #2a2e3d; border-radius:4px; padding:6px; margin-right:10px; }
     .tablewrap { overflow-x:auto; }
+    th.sortable { cursor:pointer; user-select:none; }
+    th.sortable:hover { color:#7cb8ff; }
+    .sort-arrow { font-size:10px; margin-left:4px; opacity:0.6; }
+    .del-btn { background:none; border:none; color:#e74c3c; cursor:pointer; font-size:15px; font-weight:bold; padding:0 6px; }
+    .del-btn:hover { color:#ff6b6b; }
+    .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    .filter-row label { font-size:12px; color:#999; }
 </style>
 </head>
 <body>
     <h1>ArdFx Panel</h1>
     <div class="stats" id="stats"></div>
-    <div>
+    <div class="filter-row">
         <select id="botFilter"><option value="">Tum Botlar</option></select>
         <select id="statusFilter">
             <option value="">Tum Durumlar</option>
@@ -186,13 +206,23 @@ def dashboard():
             <option value="SL">SL</option>
         </select>
         <input type="text" id="symbolFilter" placeholder="Sembol ara...">
+        <label>Baslangic:</label>
+        <input type="date" id="dateFrom">
+        <label>Bitis:</label>
+        <input type="date" id="dateTo">
+        <button id="clearDates" style="padding:6px 10px; background:#2a2e3d; color:#e6e6e6; border:1px solid #3a3e4d; border-radius:4px; cursor:pointer;">Tarihi Temizle</button>
     </div>
     <br>
     <div class="tablewrap">
     <table id="tradesTable">
         <thead>
             <tr>
-                <th>Bot</th><th>Kaynak</th><th>Sembol</th><th>Yon</th><th>Lot</th>
+                <th></th>
+                <th class="sortable" data-col="bot_name">Bot<span class="sort-arrow" id="arrow-bot_name"></span></th>
+                <th class="sortable" data-col="kaynak">Kaynak<span class="sort-arrow" id="arrow-kaynak"></span></th>
+                <th class="sortable" data-col="symbol">Sembol<span class="sort-arrow" id="arrow-symbol"></span></th>
+                <th class="sortable" data-col="action">Yon<span class="sort-arrow" id="arrow-action"></span></th>
+                <th class="sortable" data-col="lot">Lot<span class="sort-arrow" id="arrow-lot"></span></th>
                 <th>Acilis</th><th>SL</th><th>TP</th><th>Durum</th><th>Kapanis Fiyati</th>
                 <th>Kar/Zarar</th><th>Acilis Zamani</th><th>Kapanis Zamani</th>
             </tr>
@@ -203,6 +233,8 @@ def dashboard():
 
 <script>
 let allTrades = [];
+let sortCol = null;
+let sortDir = 1; // 1 = artan, -1 = azalan
 
 function badgeClass(status) {
     if (status === 'ACIK' || status === 'AÇIK') return 'badge-open';
@@ -211,17 +243,53 @@ function badgeClass(status) {
     return 'badge-other';
 }
 
+async function deleteTrade(id) {
+    if (!confirm('Bu kaydı silmek istediğine emin misin?')) return;
+    await fetch('/api/trades/' + id, { method: 'DELETE' });
+    allTrades = allTrades.filter(t => t.id !== id);
+    render();
+}
+
+function updateSortArrows() {
+    document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
+    if (sortCol) {
+        const el = document.getElementById('arrow-' + sortCol);
+        if (el) el.textContent = sortDir === 1 ? '▲' : '▼';
+    }
+}
+
 function render() {
     const botFilter = document.getElementById('botFilter').value;
     const statusFilter = document.getElementById('statusFilter').value;
     const symbolFilter = document.getElementById('symbolFilter').value.toUpperCase();
+    const dateFrom = document.getElementById('dateFrom').value;
+    const dateTo = document.getElementById('dateTo').value;
 
     let filtered = allTrades.filter(t => {
         if (botFilter && t.bot_name !== botFilter) return false;
         if (statusFilter && !(t.status || '').includes(statusFilter)) return false;
         if (symbolFilter && !(t.symbol || '').toUpperCase().includes(symbolFilter)) return false;
+        if (dateFrom || dateTo) {
+            const openDate = (t.open_time || '').substring(0, 10); // YYYY-MM-DD
+            if (dateFrom && openDate < dateFrom) return false;
+            if (dateTo && openDate > dateTo) return false;
+        }
         return true;
     });
+
+    if (sortCol) {
+        filtered = filtered.slice().sort((a, b) => {
+            let va = a[sortCol], vb = b[sortCol];
+            if (typeof va === 'string') va = va.toUpperCase();
+            if (typeof vb === 'string') vb = vb.toUpperCase();
+            if (va === null || va === undefined) va = '';
+            if (vb === null || vb === undefined) vb = '';
+            if (va < vb) return -1 * sortDir;
+            if (va > vb) return 1 * sortDir;
+            return 0;
+        });
+    }
+    updateSortArrows();
 
     let totalProfit = 0, openCount = 0, tpCount = 0, slCount = 0;
     filtered.forEach(t => {
@@ -241,6 +309,7 @@ function render() {
     const tbody = document.getElementById('tradesBody');
     tbody.innerHTML = filtered.map(function(t) {
         return '<tr>' +
+            '<td><button class="del-btn" onclick="deleteTrade(' + t.id + ')" title="Sil">✕</button></td>' +
             '<td>' + (t.bot_name || '-') + '</td>' +
             '<td>' + (t.kaynak || '-') + '</td>' +
             '<td>' + (t.symbol || '-') + '</td>' +
@@ -276,6 +345,26 @@ async function fetchTrades() {
 document.getElementById('botFilter').addEventListener('change', render);
 document.getElementById('statusFilter').addEventListener('change', render);
 document.getElementById('symbolFilter').addEventListener('input', render);
+document.getElementById('dateFrom').addEventListener('change', render);
+document.getElementById('dateTo').addEventListener('change', render);
+document.getElementById('clearDates').addEventListener('click', function() {
+    document.getElementById('dateFrom').value = '';
+    document.getElementById('dateTo').value = '';
+    render();
+});
+
+document.querySelectorAll('th.sortable').forEach(function(th) {
+    th.addEventListener('click', function() {
+        const col = th.getAttribute('data-col');
+        if (sortCol === col) {
+            sortDir *= -1;
+        } else {
+            sortCol = col;
+            sortDir = 1;
+        }
+        render();
+    });
+});
 
 fetchTrades();
 setInterval(fetchTrades, 10000);
