@@ -61,6 +61,15 @@ def init_db():
     conn.close()
 
 
+# ❗ DÜZELTİLDİ: Bu çağrı eskiden sadece "if __name__ == '__main__':" içindeydi.
+# Render'da uygulamayı GUNICORN başlatıyor (Start Command: gunicorn
+# ardfx_dashboard:app) - gunicorn dosyayı DOĞRUDAN ÇALIŞTIRMAZ, sadece "app"
+# nesnesini İÇİNDEN ALIR - bu yüzden __main__ bloğu hiç tetiklenmiyordu ve
+# tablo bir kere bile oluşturulmamıştı. Şimdi modül YÜKLENİR YÜKLENMEZ
+# (hem "python ardfx_dashboard.py" ile hem gunicorn ile) çalışacak.
+init_db()
+
+
 @app.route("/api/trade_open", methods=["POST"])
 def trade_open():
     data = request.get_json(force=True)
@@ -304,7 +313,6 @@ def service_worker():
 
 
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 9090))
     print(f"ArdFx Panel basliyor... port {port}")
     app.run(host="0.0.0.0", port=port)
