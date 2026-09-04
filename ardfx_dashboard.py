@@ -18,12 +18,20 @@ Variable" olarak (gizli) girilecek - koda hiç yazılmıyor.
 import os
 import psycopg2
 import psycopg2.extras
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+
+# Bu haberler geldiğinde "beklentiden YÜKSEK gelirse" ekonominin GÜÇLENDİĞİNİ
+# (USD güçlenir, XAUUSD baskı altında kalır) gösteren metrikler - varsayılan yön.
+# Şu listedekiler ise TERSİNE işliyor (yüksek gelmesi ekonominin ZAYIFLADIĞINI
+# gösterir - örn. işsizlik başvurusu artması kötü haber, USD zayıflar, altın destek bulur).
+INVERSE_FOR_GOLD_KEYWORDS = ["unemployment", "jobless claims", "initial claims", "continuing claims"]
 
 
 def get_conn():
@@ -54,6 +62,21 @@ def init_db():
             close_reason TEXT,
             close_time TEXT,
             kaynak TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS news_events (
+            id SERIAL PRIMARY KEY,
+            event_date TEXT,
+            event_time TEXT,
+            country TEXT,
+            event_name TEXT,
+            forecast REAL,
+            previous REAL,
+            actual REAL,
+            impact TEXT,
+            last_updated TEXT,
+            UNIQUE(event_date, event_time, event_name)
         )
     """)
     conn.commit()
@@ -153,6 +176,122 @@ def delete_trade(trade_id):
     return jsonify({"status": "ok"})
 
 
+def fetch_and_store_news():
+    """Finnhub'dan önümüzdeki 7 günün ABD ekonomik takvimini çeker, Supabase'e kaydeder."""
+    if not FINNHUB_API_KEY:
+        return {"error": "FINNHUB_API_KEY ayarlanmamış"}
+    today = datetime.utcnow().date()
+    date_from = today.isoformat()
+    date_to = (today + timedelta(days=7)).isoformat()
+    url = f"https://finnhub.io/api/v1/calendar/economic?from={date_from}&to={date_to}&token={FINNHUB_API_KEY}"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+    events = data.get("economicCalendar", []) or data.get("data", []) or []
+    conn = get_conn()
+    saved = 0
+    try:
+        cur = conn.cursor()
+        for ev in events:
+            country = (ev.get("country") or "").upper()
+            if country not in ("US", "USD", ""):
+                # Sadece ABD verisiyle ilgileniyoruz (senin tasarımın buna göreydi)
+                continue
+            impact = (ev.get("impact") or "").lower()
+            if impact not in ("high", "medium"):
+                continue  # düşük önemli haberleri gösterme, panel kalabalıklaşmasın
+            raw_time = ev.get("time", "")  # Finnhub genelde "YYYY-MM-DD HH:MM:SS" formatı döndürür
+            ev_date, ev_time = (raw_time.split(" ") + [""])[:2] if raw_time else ("", "")
+            cur.execute(
+                """INSERT INTO news_events (event_date, event_time, country, event_name, forecast, previous, actual, impact, last_updated)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (event_date, event_time, event_name)
+                   DO UPDATE SET forecast=EXCLUDED.forecast, previous=EXCLUDED.previous,
+                                 actual=EXCLUDED.actual, impact=EXCLUDED.impact, last_updated=EXCLUDED.last_updated""",
+                (
+                    ev_date, ev_time, country, ev.get("event", ""),
+                    ev.get("estimate"), ev.get("prev"), ev.get("actual"),
+                    impact, datetime.utcnow().isoformat(timespec="seconds"),
+                ),
+            )
+            saved += 1
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return {"status": "ok", "saved": saved}
+
+
+@app.route("/api/news/refresh", methods=["POST"])
+def news_refresh():
+    result = fetch_and_store_news()
+    return jsonify(result)
+
+
+@app.route("/api/news", methods=["GET"])
+def api_news():
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT MAX(last_updated) AS son FROM news_events")
+        son = cur.fetchone()["son"]
+        needs_refresh = True
+        if son:
+            try:
+                if datetime.utcnow() - datetime.fromisoformat(son) < timedelta(hours=6):
+                    needs_refresh = False
+            except Exception:
+                pass
+        cur.close()
+    finally:
+        conn.close()
+
+    if needs_refresh and FINNHUB_API_KEY:
+        fetch_and_store_news()
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        today = datetime.utcnow().date().isoformat()
+        cur.execute("SELECT * FROM news_events WHERE event_date >= %s ORDER BY event_date, event_time", (today,))
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    result = []
+    for row in rows:
+        d = dict(row)
+        forecast = d.get("forecast")
+        actual = d.get("actual")
+        name_lower = (d.get("event_name") or "").lower()
+        inverse = any(k in name_lower for k in INVERSE_FOR_GOLD_KEYWORDS)
+
+        if actual is None or forecast is None or forecast == 0:
+            d["sapma_pct"] = None
+            d["etiket"] = "⏳ Bekleniyor"
+            d["xauusd_yon"] = "-"
+        else:
+            dev_pct = (actual - forecast) / abs(forecast) * 100
+            d["sapma_pct"] = round(dev_pct, 1)
+            higher_is_usd_positive = not inverse
+            gold_pressure = (dev_pct > 0) == higher_is_usd_positive
+            if abs(dev_pct) < 2:
+                d["etiket"] = "🟡 Beklentiye Yakın"
+            elif abs(dev_pct) < 8:
+                d["etiket"] = "🟠 Orta Sapma"
+            else:
+                d["etiket"] = "🔴 Güçlü Sapma" if gold_pressure else "🟢 Güçlü Sapma"
+            d["xauusd_yon"] = "🔻 Baskı" if gold_pressure and abs(dev_pct) >= 2 else ("🔺 Destek" if abs(dev_pct) >= 2 else "➖ Nötr")
+        result.append(d)
+
+    return jsonify(result)
+
+
 @app.route("/", methods=["GET"])
 def dashboard():
     html = """
@@ -192,10 +331,21 @@ def dashboard():
     .del-btn:hover { color:#ff6b6b; }
     .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
     .filter-row label { font-size:12px; color:#999; }
+    .tabs { display:flex; gap:8px; margin-bottom:16px; }
+    .tab-btn { background:#1a1d29; color:#999; border:1px solid #2a2e3d; border-radius:6px; padding:8px 16px; cursor:pointer; font-size:14px; }
+    .tab-btn.active { background:#2d3a5c; color:#4da3ff; border-color:#4da3ff; }
+    .news-etiket { font-weight:bold; }
+    .news-tarih { color:#999; font-size:12px; }
 </style>
 </head>
 <body>
     <h1>ArdFx Panel</h1>
+    <div class="tabs">
+        <button class="tab-btn active" id="tabTrades" onclick="switchTab('trades')">Islemler</button>
+        <button class="tab-btn" id="tabNews" onclick="switchTab('news')">Haberler</button>
+    </div>
+
+    <div id="viewTrades">
     <div class="stats" id="stats"></div>
     <div class="filter-row">
         <select id="botFilter"><option value="">Tum Botlar</option></select>
@@ -229,6 +379,22 @@ def dashboard():
         </thead>
         <tbody id="tradesBody"></tbody>
     </table>
+    </div>
+    </div>
+
+    <div id="viewNews" style="display:none;">
+        <button onclick="refreshNews()" style="padding:8px 14px; background:#2d3a5c; color:#4da3ff; border:1px solid #4da3ff; border-radius:6px; cursor:pointer; margin-bottom:14px;">🔄 Haberleri Yenile</button>
+        <div class="tablewrap">
+        <table id="newsTable">
+            <thead>
+                <tr>
+                    <th>Tarih</th><th>Saat</th><th>Haber</th><th>Beklenti</th><th>Onceki</th>
+                    <th>Gerceklesen</th><th>Sapma</th><th>Etki</th><th>XAUUSD Yonu</th>
+                </tr>
+            </thead>
+            <tbody id="newsBody"></tbody>
+        </table>
+        </div>
     </div>
 
 <script>
@@ -365,6 +531,38 @@ document.querySelectorAll('th.sortable').forEach(function(th) {
         render();
     });
 });
+
+function switchTab(tab) {
+    document.getElementById('viewTrades').style.display = tab === 'trades' ? 'block' : 'none';
+    document.getElementById('viewNews').style.display = tab === 'news' ? 'block' : 'none';
+    document.getElementById('tabTrades').classList.toggle('active', tab === 'trades');
+    document.getElementById('tabNews').classList.toggle('active', tab === 'news');
+    if (tab === 'news') fetchNews();
+}
+
+async function refreshNews() {
+    await fetch('/api/news/refresh', { method: 'POST' });
+    fetchNews();
+}
+
+async function fetchNews() {
+    const res = await fetch('/api/news');
+    const news = await res.json();
+    const tbody = document.getElementById('newsBody');
+    tbody.innerHTML = news.map(function(n) {
+        return '<tr>' +
+            '<td class="news-tarih">' + (n.event_date || '-') + '</td>' +
+            '<td class="news-tarih">' + (n.event_time || '-') + '</td>' +
+            '<td>' + (n.event_name || '-') + '</td>' +
+            '<td>' + (n.forecast !== null && n.forecast !== undefined ? n.forecast : '-') + '</td>' +
+            '<td>' + (n.previous !== null && n.previous !== undefined ? n.previous : '-') + '</td>' +
+            '<td>' + (n.actual !== null && n.actual !== undefined ? n.actual : '-') + '</td>' +
+            '<td>' + (n.sapma_pct !== null && n.sapma_pct !== undefined ? n.sapma_pct + '%' : '-') + '</td>' +
+            '<td class="news-etiket">' + (n.etiket || '-') + '</td>' +
+            '<td>' + (n.xauusd_yon || '-') + '</td>' +
+            '</tr>';
+    }).join('');
+}
 
 fetchTrades();
 setInterval(fetchTrades, 10000);
