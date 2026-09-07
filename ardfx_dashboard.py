@@ -232,6 +232,52 @@ def news_refresh():
     return jsonify(result)
 
 
+@app.route("/api/news/add", methods=["POST"])
+def news_add():
+    """Manuel haber ekleme - sen her hafta Forex Factory/Investing.com gibi
+    ücretsiz bir siteden bakıp buraya elle giriyorsun, geri kalan (renklendirme,
+    sapma hesabı, XAUUSD yönü) otomatik hesaplanıyor."""
+    data = request.get_json(force=True)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO news_events (event_date, event_time, country, event_name, forecast, previous, actual, impact, last_updated)
+               VALUES (%s,%s,'US',%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (event_date, event_time, event_name)
+               DO UPDATE SET forecast=EXCLUDED.forecast, previous=EXCLUDED.previous,
+                             actual=EXCLUDED.actual, impact=EXCLUDED.impact, last_updated=EXCLUDED.last_updated""",
+            (
+                data.get("event_date", ""),
+                data.get("event_time", ""),
+                data.get("event_name", ""),
+                data.get("forecast"),
+                data.get("previous"),
+                data.get("actual"),
+                data.get("impact", "high"),
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/news/<int:news_id>", methods=["DELETE"])
+def news_delete(news_id):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM news_events WHERE id=%s", (news_id,))
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/news", methods=["GET"])
 def api_news():
     conn = get_conn()
@@ -310,6 +356,11 @@ def dashboard():
     .stat-box { background:#1a1d29; border-radius:8px; padding:14px 20px; min-width:140px; }
     .stat-box .label { color:#999; font-size:12px; }
     .stat-box .value { font-size:22px; font-weight:bold; }
+    .goal-box { background:#1a1d29; border-radius:8px; padding:14px 20px; min-width:260px; flex:1; }
+    .goal-box .label { color:#999; font-size:12px; margin-bottom:6px; }
+    .goal-bar-bg { background:#0f1117; border-radius:20px; height:22px; overflow:hidden; position:relative; }
+    .goal-bar-fill { background:linear-gradient(90deg, #2ecc71, #4da3ff); height:100%; border-radius:20px; transition: width 0.5s ease; }
+    .goal-bar-text { position:absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold; color:#fff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
     .green { color:#2ecc71; }
     .red { color:#e74c3c; }
     .blue { color:#4da3ff; }
@@ -347,6 +398,15 @@ def dashboard():
 
     <div id="viewTrades">
     <div class="stats" id="stats"></div>
+    <div class="stats">
+        <div class="goal-box">
+            <div class="label">Hedef İlerleme</div>
+            <div class="goal-bar-bg">
+                <div class="goal-bar-fill" id="goalBarFill" style="width:0%;"></div>
+                <div class="goal-bar-text" id="goalBarText">0 / 50.000 $</div>
+            </div>
+        </div>
+    </div>
     <div class="filter-row">
         <select id="botFilter"><option value="">Tum Botlar</option></select>
         <select id="statusFilter">
@@ -471,6 +531,17 @@ function render() {
         '<div class="stat-box"><div class="label">TP Sayisi</div><div class="value green">' + tpCount + '</div></div>' +
         '<div class="stat-box"><div class="label">SL Sayisi</div><div class="value red">' + slCount + '</div></div>' +
         '<div class="stat-box"><div class="label">Toplam Kar/Zarar</div><div class="value ' + (totalProfit >= 0 ? 'green' : 'red') + '">' + totalProfit.toFixed(2) + '</div></div>';
+
+    // Hedef ilerleme çubuğu - HER ZAMAN tüm işlemlerden (filtreden bağımsız)
+    // hesaplanır, böylece hangi filtreyi seçersen seç gerçek toplam ilerlemeyi gösterir.
+    const GOAL_TARGET = 50000;
+    let globalProfit = 0;
+    allTrades.forEach(t => { globalProfit += t.profit || 0; });
+    const goalPct = Math.max(0, Math.min(100, (globalProfit / GOAL_TARGET) * 100));
+    document.getElementById('goalBarFill').style.width = goalPct + '%';
+    document.getElementById('goalBarText').textContent =
+        globalProfit.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) +
+        ' / ' + GOAL_TARGET.toLocaleString('tr-TR') + ' $';
 
     const tbody = document.getElementById('tradesBody');
     tbody.innerHTML = filtered.map(function(t) {
