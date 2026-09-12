@@ -736,7 +736,7 @@ function renderView(view) {
     const tbody = document.getElementById(cfg.tbodyId);
     tbody.innerHTML = filtered.map(function(t) {
         return '<tr>' +
-            '<td><button class="del-btn" onclick="deleteTrade(\'' + view + '\', ' + t.id + ')" title="Sil">✕</button></td>' +
+            '<td><button class="del-btn" onclick="deleteTrade(\\'' + view + '\\', ' + t.id + ')" title="Sil">✕</button></td>' +
             '<td>' + (t.bot_name || '-') + '</td>' +
             '<td>' + (t.kaynak || '-') + '</td>' +
             '<td>' + (t.symbol || '-') + '</td>' +
