@@ -393,6 +393,7 @@ def dashboard():
     <h1>ArdFx Panel</h1>
     <div class="tabs">
         <button class="tab-btn active" id="tabTrades" onclick="switchTab('trades')">Islemler</button>
+        <button class="tab-btn" id="tabArdcoin" onclick="switchTab('ardcoin')">ArdCoin</button>
         <button class="tab-btn" id="tabNews" onclick="switchTab('news')">Haberler</button>
     </div>
 
@@ -428,16 +429,62 @@ def dashboard():
         <thead>
             <tr>
                 <th></th>
-                <th class="sortable" data-col="bot_name">Bot<span class="sort-arrow" id="arrow-bot_name"></span></th>
-                <th class="sortable" data-col="kaynak">Kaynak<span class="sort-arrow" id="arrow-kaynak"></span></th>
-                <th class="sortable" data-col="symbol">Sembol<span class="sort-arrow" id="arrow-symbol"></span></th>
-                <th class="sortable" data-col="action">Yon<span class="sort-arrow" id="arrow-action"></span></th>
-                <th class="sortable" data-col="lot">Lot<span class="sort-arrow" id="arrow-lot"></span></th>
+                <th class="sortable" data-col="bot_name" data-view="trades">Bot<span class="sort-arrow" id="arrow-bot_name"></span></th>
+                <th class="sortable" data-col="kaynak" data-view="trades">Kaynak<span class="sort-arrow" id="arrow-kaynak"></span></th>
+                <th class="sortable" data-col="symbol" data-view="trades">Sembol<span class="sort-arrow" id="arrow-symbol"></span></th>
+                <th class="sortable" data-col="action" data-view="trades">Yon<span class="sort-arrow" id="arrow-action"></span></th>
+                <th class="sortable" data-col="lot" data-view="trades">Lot<span class="sort-arrow" id="arrow-lot"></span></th>
                 <th>Acilis</th><th>SL</th><th>TP</th><th>Durum</th><th>Kapanis Fiyati</th>
                 <th>Kar/Zarar</th><th>Acilis Zamani</th><th>Kapanis Zamani</th>
             </tr>
         </thead>
         <tbody id="tradesBody"></tbody>
+    </table>
+    </div>
+    </div>
+
+    <div id="viewArdcoin" style="display:none;">
+    <div class="stats" id="statsArdcoin"></div>
+    <div class="stats">
+        <div class="goal-box">
+            <div class="label">ArdCoin Hedef İlerleme</div>
+            <div class="goal-bar-bg">
+                <div class="goal-bar-fill" id="goalBarFillArdcoin" style="width:0%;"></div>
+                <div class="goal-bar-text" id="goalBarTextArdcoin">0 / 50.000 $</div>
+            </div>
+        </div>
+    </div>
+    <div class="filter-row">
+        <select id="botFilterArdcoin"><option value="">Tum Botlar</option></select>
+        <select id="statusFilterArdcoin">
+            <option value="">Tum Durumlar</option>
+            <option value="ACIK">Acik</option>
+            <option value="TP">TP</option>
+            <option value="SL">SL</option>
+        </select>
+        <input type="text" id="symbolFilterArdcoin" placeholder="Sembol ara...">
+        <label>Baslangic:</label>
+        <input type="date" id="dateFromArdcoin">
+        <label>Bitis:</label>
+        <input type="date" id="dateToArdcoin">
+        <button id="clearDatesArdcoin" style="padding:6px 10px; background:#2a2e3d; color:#e6e6e6; border:1px solid #3a3e4d; border-radius:4px; cursor:pointer;">Tarihi Temizle</button>
+    </div>
+    <br>
+    <div class="tablewrap">
+    <table id="tradesTableArdcoin">
+        <thead>
+            <tr>
+                <th></th>
+                <th class="sortable" data-col="bot_name" data-view="ardcoin">Bot<span class="sort-arrow" id="arrow-bot_name-ardcoin"></span></th>
+                <th class="sortable" data-col="kaynak" data-view="ardcoin">Kaynak<span class="sort-arrow" id="arrow-kaynak-ardcoin"></span></th>
+                <th class="sortable" data-col="symbol" data-view="ardcoin">Sembol<span class="sort-arrow" id="arrow-symbol-ardcoin"></span></th>
+                <th class="sortable" data-col="action" data-view="ardcoin">Yon<span class="sort-arrow" id="arrow-action-ardcoin"></span></th>
+                <th class="sortable" data-col="lot" data-view="ardcoin">Lot<span class="sort-arrow" id="arrow-lot-ardcoin"></span></th>
+                <th>Acilis</th><th>SL</th><th>TP</th><th>Durum</th><th>Kapanis Fiyati</th>
+                <th>Kar/Zarar</th><th>Acilis Zamani</th><th>Kapanis Zamani</th>
+            </tr>
+        </thead>
+        <tbody id="tradesBodyArdcoin"></tbody>
     </table>
     </div>
     </div>
@@ -459,8 +506,25 @@ def dashboard():
 
 <script>
 let allTrades = [];
-let sortCol = null;
-let sortDir = 1; // 1 = artan, -1 = azalan
+
+// Her görünüm (İşlemler / ArdCoin) kendi filtre-sıralama alanlarını ve
+// kendi sıralama durumunu bağımsız tutuyor - aynı veriden besleniyorlar
+// ama birbirlerini HİÇ etkilemiyorlar.
+const viewConfig = {
+    trades: {
+        statsId: "stats", botFilterId: "botFilter", statusFilterId: "statusFilter",
+        symbolFilterId: "symbolFilter", dateFromId: "dateFrom", dateToId: "dateTo",
+        clearDatesId: "clearDates", tbodyId: "tradesBody",
+        goalFillId: "goalBarFill", goalTextId: "goalBarText", arrowSuffix: ""
+    },
+    ardcoin: {
+        statsId: "statsArdcoin", botFilterId: "botFilterArdcoin", statusFilterId: "statusFilterArdcoin",
+        symbolFilterId: "symbolFilterArdcoin", dateFromId: "dateFromArdcoin", dateToId: "dateToArdcoin",
+        clearDatesId: "clearDatesArdcoin", tbodyId: "tradesBodyArdcoin",
+        goalFillId: "goalBarFillArdcoin", goalTextId: "goalBarTextArdcoin", arrowSuffix: "-ardcoin"
+    }
+};
+let viewState = { trades: { sortCol: null, sortDir: 1 }, ardcoin: { sortCol: null, sortDir: 1 } };
 
 function badgeClass(status) {
     if (status === 'ACIK' || status === 'AÇIK') return 'badge-open';
@@ -473,49 +537,58 @@ async function deleteTrade(id) {
     if (!confirm('Bu kaydı silmek istediğine emin misin?')) return;
     await fetch('/api/trades/' + id, { method: 'DELETE' });
     allTrades = allTrades.filter(t => t.id !== id);
-    render();
+    renderView('trades');
+    renderView('ardcoin');
 }
 
-function updateSortArrows() {
-    document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
-    if (sortCol) {
-        const el = document.getElementById('arrow-' + sortCol);
-        if (el) el.textContent = sortDir === 1 ? '▲' : '▼';
+function updateSortArrows(view) {
+    const cfg = viewConfig[view];
+    document.querySelectorAll('.sort-arrow').forEach(el => {
+        if (el.id.endsWith(cfg.arrowSuffix) && (cfg.arrowSuffix === "" ? !el.id.includes("-ardcoin") : true)) {
+            el.textContent = '';
+        }
+    });
+    const st = viewState[view];
+    if (st.sortCol) {
+        const el = document.getElementById('arrow-' + st.sortCol + cfg.arrowSuffix);
+        if (el) el.textContent = st.sortDir === 1 ? '▲' : '▼';
     }
 }
 
-function render() {
-    const botFilter = document.getElementById('botFilter').value;
-    const statusFilter = document.getElementById('statusFilter').value;
-    const symbolFilter = document.getElementById('symbolFilter').value.toUpperCase();
-    const dateFrom = document.getElementById('dateFrom').value;
-    const dateTo = document.getElementById('dateTo').value;
+function renderView(view) {
+    const cfg = viewConfig[view];
+    const st = viewState[view];
+    const botFilter = document.getElementById(cfg.botFilterId).value;
+    const statusFilter = document.getElementById(cfg.statusFilterId).value;
+    const symbolFilter = document.getElementById(cfg.symbolFilterId).value.toUpperCase();
+    const dateFrom = document.getElementById(cfg.dateFromId).value;
+    const dateTo = document.getElementById(cfg.dateToId).value;
 
     let filtered = allTrades.filter(t => {
         if (botFilter && t.bot_name !== botFilter) return false;
         if (statusFilter && !(t.status || '').includes(statusFilter)) return false;
         if (symbolFilter && !(t.symbol || '').toUpperCase().includes(symbolFilter)) return false;
         if (dateFrom || dateTo) {
-            const openDate = (t.open_time || '').substring(0, 10); // YYYY-MM-DD
+            const openDate = (t.open_time || '').substring(0, 10);
             if (dateFrom && openDate < dateFrom) return false;
             if (dateTo && openDate > dateTo) return false;
         }
         return true;
     });
 
-    if (sortCol) {
+    if (st.sortCol) {
         filtered = filtered.slice().sort((a, b) => {
-            let va = a[sortCol], vb = b[sortCol];
+            let va = a[st.sortCol], vb = b[st.sortCol];
             if (typeof va === 'string') va = va.toUpperCase();
             if (typeof vb === 'string') vb = vb.toUpperCase();
             if (va === null || va === undefined) va = '';
             if (vb === null || vb === undefined) vb = '';
-            if (va < vb) return -1 * sortDir;
-            if (va > vb) return 1 * sortDir;
+            if (va < vb) return -1 * st.sortDir;
+            if (va > vb) return 1 * st.sortDir;
             return 0;
         });
     }
-    updateSortArrows();
+    updateSortArrows(view);
 
     let totalProfit = 0, openCount = 0, tpCount = 0, slCount = 0;
     filtered.forEach(t => {
@@ -525,25 +598,26 @@ function render() {
         if (t.status && t.status.includes('SL')) slCount++;
     });
 
-    document.getElementById('stats').innerHTML =
+    document.getElementById(cfg.statsId).innerHTML =
         '<div class="stat-box"><div class="label">Toplam Islem</div><div class="value blue">' + filtered.length + '</div></div>' +
         '<div class="stat-box"><div class="label">Acik Pozisyon</div><div class="value blue">' + openCount + '</div></div>' +
         '<div class="stat-box"><div class="label">TP Sayisi</div><div class="value green">' + tpCount + '</div></div>' +
         '<div class="stat-box"><div class="label">SL Sayisi</div><div class="value red">' + slCount + '</div></div>' +
         '<div class="stat-box"><div class="label">Toplam Kar/Zarar</div><div class="value ' + (totalProfit >= 0 ? 'green' : 'red') + '">' + totalProfit.toFixed(2) + '</div></div>';
 
-    // Hedef ilerleme çubuğu - HER ZAMAN tüm işlemlerden (filtreden bağımsız)
-    // hesaplanır, böylece hangi filtreyi seçersen seç gerçek toplam ilerlemeyi gösterir.
+    // Hedef ilerleme - bu görünümün SEÇİLİ BOT filtresine göre hesaplanır
+    // (botFilter boşsa tüm işlemler, seçiliyse sadece o botun toplamı).
     const GOAL_TARGET = 50000;
+    let goalSource = botFilter ? allTrades.filter(t => t.bot_name === botFilter) : allTrades;
     let globalProfit = 0;
-    allTrades.forEach(t => { globalProfit += t.profit || 0; });
+    goalSource.forEach(t => { globalProfit += t.profit || 0; });
     const goalPct = Math.max(0, Math.min(100, (globalProfit / GOAL_TARGET) * 100));
-    document.getElementById('goalBarFill').style.width = goalPct + '%';
-    document.getElementById('goalBarText').textContent =
+    document.getElementById(cfg.goalFillId).style.width = goalPct + '%';
+    document.getElementById(cfg.goalTextId).textContent =
         globalProfit.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) +
         ' / ' + GOAL_TARGET.toLocaleString('tr-TR') + ' $';
 
-    const tbody = document.getElementById('tradesBody');
+    const tbody = document.getElementById(cfg.tbodyId);
     tbody.innerHTML = filtered.map(function(t) {
         return '<tr>' +
             '<td><button class="del-btn" onclick="deleteTrade(' + t.id + ')" title="Sil">✕</button></td>' +
@@ -564,8 +638,9 @@ function render() {
     }).join('');
 }
 
-function updateBotFilterOptions() {
-    const sel = document.getElementById('botFilter');
+function updateBotFilterOptions(view) {
+    const cfg = viewConfig[view];
+    const sel = document.getElementById(cfg.botFilterId);
     const current = sel.value;
     const bots = [...new Set(allTrades.map(function(t) { return t.bot_name; }))].filter(Boolean);
     sel.innerHTML = '<option value="">Tum Botlar</option>' + bots.map(function(b) { return '<option value="' + b + '">' + b + '</option>'; }).join('');
@@ -575,38 +650,49 @@ function updateBotFilterOptions() {
 async function fetchTrades() {
     const res = await fetch('/api/trades');
     allTrades = await res.json();
-    updateBotFilterOptions();
-    render();
+    updateBotFilterOptions('trades');
+    updateBotFilterOptions('ardcoin');
+    renderView('trades');
+    renderView('ardcoin');
 }
 
-document.getElementById('botFilter').addEventListener('change', render);
-document.getElementById('statusFilter').addEventListener('change', render);
-document.getElementById('symbolFilter').addEventListener('input', render);
-document.getElementById('dateFrom').addEventListener('change', render);
-document.getElementById('dateTo').addEventListener('change', render);
-document.getElementById('clearDates').addEventListener('click', function() {
-    document.getElementById('dateFrom').value = '';
-    document.getElementById('dateTo').value = '';
-    render();
-});
+function wireViewControls(view) {
+    const cfg = viewConfig[view];
+    document.getElementById(cfg.botFilterId).addEventListener('change', () => renderView(view));
+    document.getElementById(cfg.statusFilterId).addEventListener('change', () => renderView(view));
+    document.getElementById(cfg.symbolFilterId).addEventListener('input', () => renderView(view));
+    document.getElementById(cfg.dateFromId).addEventListener('change', () => renderView(view));
+    document.getElementById(cfg.dateToId).addEventListener('change', () => renderView(view));
+    document.getElementById(cfg.clearDatesId).addEventListener('click', () => {
+        document.getElementById(cfg.dateFromId).value = '';
+        document.getElementById(cfg.dateToId).value = '';
+        renderView(view);
+    });
+}
+wireViewControls('trades');
+wireViewControls('ardcoin');
 
 document.querySelectorAll('th.sortable').forEach(function(th) {
     th.addEventListener('click', function() {
+        const view = th.getAttribute('data-view') || 'trades';
         const col = th.getAttribute('data-col');
-        if (sortCol === col) {
-            sortDir *= -1;
+        const st = viewState[view];
+        if (st.sortCol === col) {
+            st.sortDir *= -1;
         } else {
-            sortCol = col;
-            sortDir = 1;
+            st.sortCol = col;
+            st.sortDir = 1;
         }
-        render();
+        renderView(view);
     });
 });
 
 function switchTab(tab) {
     document.getElementById('viewTrades').style.display = tab === 'trades' ? 'block' : 'none';
+    document.getElementById('viewArdcoin').style.display = tab === 'ardcoin' ? 'block' : 'none';
     document.getElementById('viewNews').style.display = tab === 'news' ? 'block' : 'none';
     document.getElementById('tabTrades').classList.toggle('active', tab === 'trades');
+    document.getElementById('tabArdcoin').classList.toggle('active', tab === 'ardcoin');
     document.getElementById('tabNews').classList.toggle('active', tab === 'news');
     if (tab === 'news') fetchNews();
 }
