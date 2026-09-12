@@ -65,6 +65,26 @@ def init_db():
         )
     """)
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS ardcoin_trades (
+            id SERIAL PRIMARY KEY,
+            bot_name TEXT,
+            ticket TEXT,
+            symbol TEXT,
+            action TEXT,
+            lot REAL,
+            open_price REAL,
+            sl REAL,
+            tp REAL,
+            open_time TEXT,
+            status TEXT DEFAULT 'AÇIK',
+            close_price REAL,
+            profit REAL,
+            close_reason TEXT,
+            close_time TEXT,
+            kaynak TEXT
+        )
+    """)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS news_events (
             id SERIAL PRIMARY KEY,
             event_date TEXT,
@@ -169,6 +189,93 @@ def delete_trade(trade_id):
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM trades WHERE id=%s", (trade_id,))
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
+# ============================================================
+#  ARDCOIN - "İşlemler" ile TAMAMEN AYRI tablo/endpoint'ler. Biri diğerini
+#  hiç etkilemez - silme, ekleme, hiçbir şey karışmaz.
+# ============================================================
+@app.route("/api/ardcoin/trade_open", methods=["POST"])
+def ardcoin_trade_open():
+    data = request.get_json(force=True)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO ardcoin_trades (bot_name, ticket, symbol, action, lot, open_price, sl, tp, open_time, status, kaynak)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'AÇIK', %s)""",
+            (
+                data.get("bot_name", "Bilinmiyor"),
+                str(data.get("ticket", "")),
+                data.get("symbol", ""),
+                data.get("action", ""),
+                data.get("lot", 0),
+                data.get("open_price", 0),
+                data.get("sl", 0),
+                data.get("tp", 0),
+                datetime.now().isoformat(timespec="seconds"),
+                data.get("kaynak", ""),
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ardcoin/trade_close", methods=["POST"])
+def ardcoin_trade_close():
+    data = request.get_json(force=True)
+    ticket = str(data.get("ticket", ""))
+    bot_name = data.get("bot_name", "Bilinmiyor")
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE ardcoin_trades SET status=%s, close_price=%s, profit=%s, close_reason=%s, close_time=%s
+               WHERE ticket=%s AND bot_name=%s AND status='AÇIK'""",
+            (
+                data.get("close_reason", "KAPANDI"),
+                data.get("close_price", 0),
+                data.get("profit", 0),
+                data.get("close_reason", ""),
+                datetime.now().isoformat(timespec="seconds"),
+                ticket,
+                bot_name,
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ardcoin/trades", methods=["GET"])
+def api_ardcoin_trades():
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM ardcoin_trades ORDER BY id DESC LIMIT 300")
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/ardcoin/trades/<int:trade_id>", methods=["DELETE"])
+def delete_ardcoin_trade(trade_id):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ardcoin_trades WHERE id=%s", (trade_id,))
         conn.commit()
         cur.close()
     finally:
@@ -506,25 +613,31 @@ def dashboard():
 
 <script>
 let allTrades = [];
+let allArdcoinTrades = [];
 
-// Her görünüm (İşlemler / ArdCoin) kendi filtre-sıralama alanlarını ve
-// kendi sıralama durumunu bağımsız tutuyor - aynı veriden besleniyorlar
-// ama birbirlerini HİÇ etkilemiyorlar.
+// Her görünüm (İşlemler / ArdCoin) artık TAMAMEN AYRI bir veri kaynağından
+// besleniyor (ayrı tablo, ayrı uç nokta) - silme/ekleme birbirini HİÇ etkilemez.
 const viewConfig = {
     trades: {
         statsId: "stats", botFilterId: "botFilter", statusFilterId: "statusFilter",
         symbolFilterId: "symbolFilter", dateFromId: "dateFrom", dateToId: "dateTo",
         clearDatesId: "clearDates", tbodyId: "tradesBody",
-        goalFillId: "goalBarFill", goalTextId: "goalBarText", arrowSuffix: ""
+        goalFillId: "goalBarFill", goalTextId: "goalBarText", arrowSuffix: "",
+        apiPath: "/api/trades", deletePath: "/api/trades/"
     },
     ardcoin: {
         statsId: "statsArdcoin", botFilterId: "botFilterArdcoin", statusFilterId: "statusFilterArdcoin",
         symbolFilterId: "symbolFilterArdcoin", dateFromId: "dateFromArdcoin", dateToId: "dateToArdcoin",
         clearDatesId: "clearDatesArdcoin", tbodyId: "tradesBodyArdcoin",
-        goalFillId: "goalBarFillArdcoin", goalTextId: "goalBarTextArdcoin", arrowSuffix: "-ardcoin"
+        goalFillId: "goalBarFillArdcoin", goalTextId: "goalBarTextArdcoin", arrowSuffix: "-ardcoin",
+        apiPath: "/api/ardcoin/trades", deletePath: "/api/ardcoin/trades/"
     }
 };
 let viewState = { trades: { sortCol: null, sortDir: 1 }, ardcoin: { sortCol: null, sortDir: 1 } };
+
+function getData(view) {
+    return view === "trades" ? allTrades : allArdcoinTrades;
+}
 
 function badgeClass(status) {
     if (status === 'ACIK' || status === 'AÇIK') return 'badge-open';
@@ -533,12 +646,16 @@ function badgeClass(status) {
     return 'badge-other';
 }
 
-async function deleteTrade(id) {
+async function deleteTrade(view, id) {
     if (!confirm('Bu kaydı silmek istediğine emin misin?')) return;
-    await fetch('/api/trades/' + id, { method: 'DELETE' });
-    allTrades = allTrades.filter(t => t.id !== id);
-    renderView('trades');
-    renderView('ardcoin');
+    const cfg = viewConfig[view];
+    await fetch(cfg.deletePath + id, { method: 'DELETE' });
+    if (view === "trades") {
+        allTrades = allTrades.filter(t => t.id !== id);
+    } else {
+        allArdcoinTrades = allArdcoinTrades.filter(t => t.id !== id);
+    }
+    renderView(view);
 }
 
 function updateSortArrows(view) {
@@ -558,13 +675,14 @@ function updateSortArrows(view) {
 function renderView(view) {
     const cfg = viewConfig[view];
     const st = viewState[view];
+    const data = getData(view);
     const botFilter = document.getElementById(cfg.botFilterId).value;
     const statusFilter = document.getElementById(cfg.statusFilterId).value;
     const symbolFilter = document.getElementById(cfg.symbolFilterId).value.toUpperCase();
     const dateFrom = document.getElementById(cfg.dateFromId).value;
     const dateTo = document.getElementById(cfg.dateToId).value;
 
-    let filtered = allTrades.filter(t => {
+    let filtered = data.filter(t => {
         if (botFilter && t.bot_name !== botFilter) return false;
         if (statusFilter && !(t.status || '').includes(statusFilter)) return false;
         if (symbolFilter && !(t.symbol || '').toUpperCase().includes(symbolFilter)) return false;
@@ -605,10 +723,8 @@ function renderView(view) {
         '<div class="stat-box"><div class="label">SL Sayisi</div><div class="value red">' + slCount + '</div></div>' +
         '<div class="stat-box"><div class="label">Toplam Kar/Zarar</div><div class="value ' + (totalProfit >= 0 ? 'green' : 'red') + '">' + totalProfit.toFixed(2) + '</div></div>';
 
-    // Hedef ilerleme - bu görünümün SEÇİLİ BOT filtresine göre hesaplanır
-    // (botFilter boşsa tüm işlemler, seçiliyse sadece o botun toplamı).
     const GOAL_TARGET = 50000;
-    let goalSource = botFilter ? allTrades.filter(t => t.bot_name === botFilter) : allTrades;
+    let goalSource = botFilter ? data.filter(t => t.bot_name === botFilter) : data;
     let globalProfit = 0;
     goalSource.forEach(t => { globalProfit += t.profit || 0; });
     const goalPct = Math.max(0, Math.min(100, (globalProfit / GOAL_TARGET) * 100));
@@ -620,7 +736,7 @@ function renderView(view) {
     const tbody = document.getElementById(cfg.tbodyId);
     tbody.innerHTML = filtered.map(function(t) {
         return '<tr>' +
-            '<td><button class="del-btn" onclick="deleteTrade(' + t.id + ')" title="Sil">✕</button></td>' +
+            '<td><button class="del-btn" onclick="deleteTrade(\'' + view + '\', ' + t.id + ')" title="Sil">✕</button></td>' +
             '<td>' + (t.bot_name || '-') + '</td>' +
             '<td>' + (t.kaynak || '-') + '</td>' +
             '<td>' + (t.symbol || '-') + '</td>' +
@@ -640,19 +756,25 @@ function renderView(view) {
 
 function updateBotFilterOptions(view) {
     const cfg = viewConfig[view];
+    const data = getData(view);
     const sel = document.getElementById(cfg.botFilterId);
     const current = sel.value;
-    const bots = [...new Set(allTrades.map(function(t) { return t.bot_name; }))].filter(Boolean);
+    const bots = [...new Set(data.map(function(t) { return t.bot_name; }))].filter(Boolean);
     sel.innerHTML = '<option value="">Tum Botlar</option>' + bots.map(function(b) { return '<option value="' + b + '">' + b + '</option>'; }).join('');
     sel.value = current;
 }
 
 async function fetchTrades() {
-    const res = await fetch('/api/trades');
+    const res = await fetch(viewConfig.trades.apiPath);
     allTrades = await res.json();
     updateBotFilterOptions('trades');
-    updateBotFilterOptions('ardcoin');
     renderView('trades');
+}
+
+async function fetchArdcoinTrades() {
+    const res = await fetch(viewConfig.ardcoin.apiPath);
+    allArdcoinTrades = await res.json();
+    updateBotFilterOptions('ardcoin');
     renderView('ardcoin');
 }
 
@@ -694,6 +816,7 @@ function switchTab(tab) {
     document.getElementById('tabTrades').classList.toggle('active', tab === 'trades');
     document.getElementById('tabArdcoin').classList.toggle('active', tab === 'ardcoin');
     document.getElementById('tabNews').classList.toggle('active', tab === 'news');
+    if (tab === 'ardcoin') fetchArdcoinTrades();
     if (tab === 'news') fetchNews();
 }
 
@@ -723,6 +846,7 @@ async function fetchNews() {
 
 fetchTrades();
 setInterval(fetchTrades, 10000);
+setInterval(fetchArdcoinTrades, 10000);
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function(){});
