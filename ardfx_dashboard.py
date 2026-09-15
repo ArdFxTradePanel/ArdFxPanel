@@ -99,6 +99,16 @@ def init_db():
             UNIQUE(event_date, event_time, event_name)
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS signal_board (
+            id SERIAL PRIMARY KEY,
+            ticker TEXT,
+            action TEXT,
+            source TEXT,
+            price REAL,
+            created_at TEXT
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -281,6 +291,51 @@ def delete_ardcoin_trade(trade_id):
     finally:
         conn.close()
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/signal/push", methods=["POST"])
+def signal_push():
+    """Bir sinyal kaynağı (Telegram relay, MT5 Tarayıcı vb.) yeni bir sinyal
+    ürettiğinde buraya yazar. Panoyu dinleyen TÜM PC'ler bunu görecek."""
+    data = request.get_json(force=True)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO signal_board (ticker, action, source, price, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (
+                str(data.get("ticker", "")).upper(),
+                str(data.get("action", "")).upper(),
+                data.get("source", ""),
+                data.get("price"),
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/signal/pull", methods=["GET"])
+def signal_pull():
+    """Her PC, 'en son gördüğüm ID neydi' diyerek buraya sorar, ondan SONRAKİ
+    yeni sinyalleri alır. Böylece her PC kendi ilerleme durumunu kendi tutar,
+    aynı sinyali iki kez işlemez."""
+    since_id = request.args.get("since_id", 0, type=int)
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM signal_board WHERE id > %s ORDER BY id ASC LIMIT 100",
+            (since_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify([dict(r) for r in rows])
 
 
 def fetch_and_store_news():
