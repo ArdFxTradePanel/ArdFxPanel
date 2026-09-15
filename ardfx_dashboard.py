@@ -106,6 +106,8 @@ def init_db():
             action TEXT,
             source TEXT,
             price REAL,
+            pip_target INTEGER,
+            signal_style TEXT,
             created_at TEXT
         )
     """)
@@ -302,12 +304,14 @@ def signal_push():
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO signal_board (ticker, action, source, price, created_at) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO signal_board (ticker, action, source, price, pip_target, signal_style, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (
                 str(data.get("ticker", "")).upper(),
                 str(data.get("action", "")).upper(),
                 data.get("source", ""),
                 data.get("price"),
+                data.get("pip_target"),
+                data.get("signal_style", ""),
                 datetime.utcnow().isoformat(timespec="seconds"),
             ),
         )
