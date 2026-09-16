@@ -111,6 +111,13 @@ def init_db():
             created_at TEXT
         )
     """)
+    # ❗ EKLENDİ: "CREATE TABLE IF NOT EXISTS", tablo ZATEN VARSA hiçbir şey
+    # yapmıyor - yani tablo daha önce (eski sütunlarla) oluşturulmuşsa, yeni
+    # eklenen sütunlar (pip_target, signal_style) hiç eklenmiyordu. Bu ALTER
+    # komutları, var olan tabloya EKSİK sütunları sonradan da ekliyor -
+    # zaten varsa (IF NOT EXISTS) hiçbir şey yapmıyor, güvenli.
+    cur.execute("ALTER TABLE signal_board ADD COLUMN IF NOT EXISTS pip_target INTEGER")
+    cur.execute("ALTER TABLE signal_board ADD COLUMN IF NOT EXISTS signal_style TEXT")
     conn.commit()
     cur.close()
     conn.close()
